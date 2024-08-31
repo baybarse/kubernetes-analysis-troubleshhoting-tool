@@ -22,7 +22,7 @@ fi
 
 # Install Kubernetes Python Client
 echo "Installing Kubernetes Python client..."
-pip3 install kubernetes
+pip3 install kubernetes pyyaml
 
 # Check if Kubernetes client was installed
 if ! python3 -c "import kubernetes" >/dev/null 2>&1; then
@@ -30,9 +30,10 @@ if ! python3 -c "import kubernetes" >/dev/null 2>&1; then
     exit 1
 fi
 
-# Download the k8s_troubleshooter.py script
+# Download the k8s_troubleshooter.py script and thresholds.yaml
 echo "Downloading the Kubernetes Troubleshooting Tool..."
-wget -q https://raw.githubusercontent.com/yourusername/k8s-troubleshooter/main/k8s_troubleshooter.py -O k8s_troubleshooter.py
+wget -q https://github.com/baybarse/kubernetes-analysis-troubleshhoting-tool/main/k8s_troubleshooter.py -O k8s_troubleshooter.py
+wget -q https://github.com/baybarse/kubernetes-analysis-troubleshhoting-tool/main/thresholds.yaml -O thresholds.yaml
 
 # Ensure the script is executable
 chmod +x k8s_troubleshooter.py
