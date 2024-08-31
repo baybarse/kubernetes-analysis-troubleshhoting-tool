@@ -1,0 +1,5 @@
+cpu_usage_threshold: 75  # CPU usage threshold in percentage
+memory_usage_threshold: 80  # Memory usage threshold in percentage
+latency_threshold_ms: 100  # Service latency threshold in milliseconds
+pod_scheduling_delay_threshold: 300  # Pod scheduling delay threshold in seconds
+disk_pressure_threshold: 90  # Disk usage threshold in percentage
