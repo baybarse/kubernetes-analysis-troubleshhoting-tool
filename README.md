@@ -105,12 +105,14 @@ Here’s an example of what the output looks like when you run the tool:
 
 Cluster Overview:
 - Kubernetes Version: v1.24.0
-- Nodes: 3
+- Nodes: 5
   - node-1: Ready
   - node-2: Ready
   - node-3: Ready
-- Namespaces: 5 (default, kube-system, kube-public, dev, prod)
-- Total Pods: 120 (110 Running, 5 Pending, 5 Failed)
+  - node-4: Ready
+  - node-5: NotReady (DiskPressure)
+- Namespaces: 8 (default, kube-system, kube-public, dev, prod, staging, monitoring, logging)
+- Total Pods: 320 (290 Running, 10 Pending, 20 Failed)
 
 Critical Issues Detected:
 1. **Namespace: kube-system**
@@ -121,36 +123,138 @@ Critical Issues Detected:
      ```
    - Suggested Action:
      - Check for port conflicts and DNS configuration issues.
+     - Ensure no other processes are using port 53 on this node.
+     - Restart the "kube-dns" pod and monitor its status.
+
+2. **Node: node-5**
+   - Issue: Node is under DiskPressure and marked as NotReady.
+   - Disk Usage: 92% (Threshold: 90%)
+   - Suggested Action:
+     - Free up disk space on node-5 by cleaning up unused images, volumes, or logs.
+     - Consider adding more disk capacity to node-5 or redistributing workloads.
+
+3. **Namespace: prod**
+   - Issue: Deployment "payment-service" has 3 replicas not available.
+   - Description: Pods are failing liveness checks due to high memory usage.
+   - Suggested Action:
+     - Review and optimize memory usage in the payment-service application.
+     - Increase memory limits in the deployment configuration.
+     - Redeploy the application and monitor its status.
+
+4. **Namespace: dev**
+   - Issue: Pod "api-server" in Pending state for over 15 minutes.
+   - Reason: Insufficient CPU resources available for scheduling.
+   - Suggested Action:
+     - Check if there are sufficient CPU resources available on the nodes.
+     - Consider adjusting resource requests or scaling the cluster.
+     - Investigate node taints or affinity/anti-affinity rules that might be affecting scheduling.
+
+5. **Namespace: staging**
+   - Issue: Pod "frontend-app" in Failed state due to OOMKilled (Out of Memory).
+   - Logs:
+     ```
+     MemoryError: Unable to allocate memory.
+     ```
+   - Suggested Action:
+     - Increase memory limits for the frontend-app deployment.
+     - Optimize the application code to reduce memory consumption.
+     - Monitor the pod's memory usage after redeployment.
 
 Performance Warnings:
-1. **Node: node-1**
-   - Warning: CPU usage is high (85.00%).
+1. **Node: node-2**
+   - Warning: CPU usage is high (87.00%).
    - Suggested Action:
-     - Consider redistributing workloads or scaling up resources.
+     - Redistribute workloads to less utilized nodes.
+     - Consider scaling up resources or adding more nodes to the cluster.
+
+2. **Namespace: monitoring**
+   - Warning: Service "prometheus" experiencing high latency (average 250ms).
+   - Suggested Action:
+     - Investigate network policies or QoS settings affecting Prometheus.
+     - Check for network congestion or misconfigured services.
+     - Optimize Prometheus resource allocation or sharding.
+
+3. **Namespace: logging**
+   - Warning: Fluentd pods experiencing high memory usage (95%).
+   - Suggested Action:
+     - Investigate the volume of logs being processed by Fluentd.
+     - Optimize Fluentd configuration to reduce memory usage.
+     - Consider increasing memory allocation or scaling the Fluentd deployment.
 
 Security Scan Results:
-- Vulnerabilities Detected: 1 (High Severity)
-  - High Severity: CVE-2024-5678 found in image "nginx:1.19.0" used by "web-app" deployment.
+- Vulnerabilities Detected: 2 (1 High, 1 Medium)
+  - High Severity: CVE-2024-5678 found in image "nginx:1.19.0" used by "web-app" deployment (Namespace: prod).
   - Suggested Action:
     - Update the "nginx" image to the latest secure version.
-    - Review image security policies.
+    - Review image security policies and ensure regular vulnerability scans.
+  
+  - Medium Severity: CVE-2023-1234 found in image "redis:6.2.0" used by "cache-service" deployment (Namespace: dev).
+  - Suggested Action:
+    - Update the "redis" image to a secure version.
+    - Implement automated image vulnerability scanning in your CI/CD pipeline.
 
 Network Diagnostics:
-- Warning: Service "my-service" in namespace "default" has no active endpoints.
-  - Suggested Action:
-    - Check if the associated pods are running and ready.
-    - Verify the service selector matches the pod labels correctly.
+1. **Namespace: default**
+   - Issue: Service "internal-api" has no active endpoints.
+   - Suggested Action:
+     - Ensure that the associated pods are running and have passed readiness probes.
+     - Verify that the service selector matches the pod labels correctly.
+     - Check for any network policies that might be blocking traffic.
+
+2. **Namespace: prod**
+   - Issue: Pod "payment-gateway" is not using the recommended DNS policy ("ClusterFirst").
+   - Suggested Action:
+     - Update the DNS policy in the pod specification to "ClusterFirst".
+     - Verify that internal DNS resolution is functioning correctly for this pod.
+
+3. **Namespace: staging**
+   - Issue: Pod "web-server" failed to establish connectivity to the "database" service.
+   - Suggested Action:
+     - Check the service and pod network configurations.
+     - Ensure that network policies allow traffic between "web-server" and "database" pods.
+     - Verify that the "database" service has active, ready endpoints.
+
+Storage Diagnostics:
+1. **PersistentVolume: pv-log-storage**
+   - Issue: PersistentVolume is in Released state but not reused.
+   - Suggested Action:
+     - If the PersistentVolume is no longer needed, delete it to free up resources.
+     - If it should be reused, ensure it is properly bound to a PersistentVolumeClaim.
+
+2. **PersistentVolume: pv-backup-storage**
+   - Issue: PersistentVolume is in Failed state.
+   - Suggested Action:
+     - Investigate the underlying storage system for issues.
+     - Check if the PersistentVolumeClaim is correctly configured.
+     - Consider deleting and recreating the PersistentVolume if the issue persists.
+
+Pod Disruption Budget Diagnostics:
+1. **Namespace: prod**
+   - Issue: PodDisruptionBudget "payment-pdb" has fewer healthy pods than desired.
+   - Current Healthy: 2, Desired Healthy: 4
+   - Suggested Action:
+     - Investigate disruptions or issues affecting the pods under this PDB.
+     - Ensure sufficient resources and replicas are available to meet the disruption budget.
 
 Summary:
-- 1 Critical issue detected.
-- 1 Performance warning.
-- 1 Security vulnerability identified.
+- 5 Critical issues detected.
+- 3 Performance warnings.
+- 2 Security vulnerabilities identified.
+- 3 Network diagnostics issues identified.
+- 2 Storage issues identified.
+- 1 PodDisruptionBudget issue detected.
 
 Suggested Next Steps:
-1. Address the critical issues in the identified namespaces and nodes.
-2. Investigate and optimize resource usage on high-demand nodes.
-3. Review security vulnerabilities and update affected images.
+1. Address the critical issues in the kube-system, prod, dev, and staging namespaces.
+2. Investigate and optimize resource usage on high-demand nodes (node-2 and node-5).
+3. Review and mitigate security vulnerabilities in nginx and redis images.
+4. Resolve network diagnostics issues in the default, prod, and staging namespaces.
+5. Ensure PersistentVolumes are correctly bound and storage resources are available.
+6. Verify PodDisruptionBudgets are maintained to ensure service availability.
 ```
+
+
+
 
 ## Configuration
 
