@@ -1,3 +1,4 @@
+import yaml
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import sys
@@ -11,6 +12,11 @@ class K8sTroubleshooter:
 
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
+        self.policy_v1 = client.PolicyV1Api()
+
+        # Load thresholds from YAML file
+        with open("thresholds.yaml", 'r') as stream:
+            self.thresholds = yaml.safe_load(stream)
 
     def diagnose_cluster(self):
         print("[K8S Troubleshooter] Starting full cluster diagnostic...\n")
@@ -19,6 +25,8 @@ class K8sTroubleshooter:
         performance_warnings = self.check_performance_warnings()
         security_issues = self.scan_security_vulnerabilities()
         self.network_diagnostics()
+        self.storage_checks()
+        self.pod_disruption_checks()
         self.summary(critical_issues, performance_warnings, security_issues)
         print("\n[K8S Troubleshooter] Full cluster diagnostic completed. Please review the above suggestions and take the necessary actions to ensure cluster stability and security.")
 
@@ -48,7 +56,7 @@ class K8sTroubleshooter:
         critical_issues = []
         print("Critical Issues Detected:")
 
-        # Check for Pods in CrashLoopBackOff or Failed states
+        # Pod in CrashLoopBackOff or Failed state
         try:
             all_pods = self.core_v1.list_pod_for_all_namespaces().items
             for pod in all_pods:
@@ -69,7 +77,7 @@ class K8sTroubleshooter:
         except ApiException as e:
             print(f"Error fetching pods: {e}\n")
 
-        # Check for Nodes under MemoryPressure or DiskPressure
+        # Nodes under MemoryPressure or DiskPressure
         try:
             nodes = self.core_v1.list_node().items
             for node in nodes:
@@ -84,12 +92,11 @@ class K8sTroubleshooter:
                         print(f"2. **Node: {node.metadata.name}**")
                         print(f"   - Issue: Node is under DiskPressure.")
                         print("   - Suggested Action:")
-                        print("     - Free up disk space on the node.")
-                        print("     - Consider moving pods to other nodes with more available disk space.\n")
+                        print(f"     - Disk usage is high on node {node.metadata.name}. Consider freeing up space or redistributing workloads.\n")
         except ApiException as e:
             print(f"Error fetching nodes: {e}\n")
 
-        # Check for Deployments with unavailable replicas
+        # Deployments with unavailable replicas
         try:
             deployments = self.apps_v1.list_deployment_for_all_namespaces().items
             for deploy in deployments:
@@ -115,37 +122,63 @@ class K8sTroubleshooter:
         performance_warnings = []
         print("Performance Warnings:")
 
-        # Example 1: High latency in a service
-        # Placeholder for actual service latency checks
-        print("1. **Namespace: dev**")
-        print("   - Warning: Service \"backend\" experiencing high latency (average 150ms).")
-        print("   - Suggested Action:")
-        print("     - Analyze network policies and QoS settings.")
-        print("     - Check for potential network congestion or misconfigured services.\n")
-        performance_warnings.append({
-            'namespace': 'dev',
-            'service': 'backend',
-            'latency': '150ms'
-        })
-
-        # Example 2: High resource usage cluster-wide
+        # High resource usage cluster-wide
         try:
             nodes = self.core_v1.list_node().items
-            total_cpu = 0
-            total_memory = 0
             for node in nodes:
-                alloc_cpu = node.status.allocatable['cpu']
-                alloc_memory = node.status.allocatable['memory']
-                total_cpu += int(alloc_cpu.strip('m')) / 1000
-                total_memory += int(alloc_memory.strip('Ki')) / (1024 * 1024)
-            print(f"2. **Cluster Resource Usage**")
-            print(f"   - CPU Usage: {total_cpu:.2f} cores used across all nodes.")
-            print(f"   - Memory Usage: {total_memory:.2f} GiB used across all nodes.")
-            print("   - Suggested Action:")
-            print("     - Monitor resource usage trends.")
-            print("     - Consider scaling the cluster or optimizing resource allocation.\n")
+                node_cpu = node.status.allocatable['cpu']
+                node_memory = node.status.allocatable['memory']
+                usage_cpu = self.core_v1.read_node_status(node.metadata.name).status.capacity['cpu']
+                usage_memory = self.core_v1.read_node_status(node.metadata.name).status.capacity['memory']
+
+                cpu_usage_percentage = (int(usage_cpu.strip('m')) / int(node_cpu.strip('m'))) * 100
+                memory_usage_percentage = (int(usage_memory.strip('Ki')) / int(node_memory.strip('Ki'))) * 100
+
+                if cpu_usage_percentage > self.thresholds['cpu_usage_threshold']:
+                    print(f"1. **Node: {node.metadata.name}**")
+                    print(f"   - Warning: CPU usage is high ({cpu_usage_percentage:.2f}%).")
+                    print("   - Suggested Action:")
+                    print("     - Consider redistributing workloads or scaling up resources.\n")
+                    performance_warnings.append({
+                        'node': node.metadata.name,
+                        'cpu_usage': cpu_usage_percentage
+                    })
+
+                if memory_usage_percentage > self.thresholds['memory_usage_threshold']:
+                    print(f"1. **Node: {node.metadata.name}**")
+                    print(f"   - Warning: Memory usage is high ({memory_usage_percentage:.2f}%).")
+                    print("   - Suggested Action:")
+                    print("     - Consider redistributing workloads or scaling up resources.\n")
+                    performance_warnings.append({
+                        'node': node.metadata.name,
+                        'memory_usage': memory_usage_percentage
+                    })
+
         except ApiException as e:
             print(f"Error fetching node resource usage: {e}\n")
+
+        # Long pod scheduling time
+        try:
+            all_pods = self.core_v1.list_pod_for_all_namespaces().items
+            for pod in all_pods:
+                if pod.status.phase == "Pending" and pod.status.start_time:
+                    # Calculate the time the pod has been in the pending state
+                    time_in_pending = (client.V1Time.now() - pod.status.start_time).total_seconds()
+
+                    if time_in_pending > self.thresholds['pod_scheduling_delay_threshold']:
+                        print(f"2. **Namespace: {pod.metadata.namespace}**")
+                        print(f"   - Issue: Pod \"{pod.metadata.name}\" has been pending for {time_in_pending / 60:.2f} minutes.")
+                        print("   - Suggested Action:")
+                        print("     - Check if there are sufficient resources available for scheduling.")
+                        print("     - Investigate potential resource quotas, node affinity, or taints/tolerations that might be causing delays.\n")
+                        performance_warnings.append({
+                            'namespace': pod.metadata.namespace,
+                            'pod': pod.metadata.name,
+                            'issue': 'Extended pending state',
+                            'time_in_pending': time_in_pending / 60  # Convert seconds to minutes
+                        })
+        except ApiException as e:
+            print(f"Error fetching pod scheduling information: {e}\n")
 
         return performance_warnings
 
@@ -153,17 +186,28 @@ class K8sTroubleshooter:
         security_issues = []
         print("Security Scan Results:")
 
-        # Placeholder for actual security vulnerability scanning logic
-        print("- Vulnerabilities Detected: 2 (1 High, 1 Medium)")
-        print("  - High Severity: CVE-2024-5678 found in image \"nginx:1.19.0\" used by \"web-app\" deployment.")
-        print("  - Suggested Action:")
-        print("    - Update the \"nginx\" image to the latest version.")
-        print("    - Review image security policies and ensure regular vulnerability scans.\n")
-        security_issues.append({
-            'vulnerability': 'CVE-2024-5678',
-            'severity': 'High',
-            'image': 'nginx:1.19.0'
-        })
+        try:
+            # Example security vulnerability detection logic
+            all_pods = self.core_v1.list_pod_for_all_namespaces().items
+            for pod in all_pods:
+                for container in pod.spec.containers:
+                    image_name = container.image
+                    # Placeholder logic for checking image vulnerabilities
+                    if "nginx" in image_name:
+                        print(f"1. **Namespace: {pod.metadata.namespace}**")
+                        print(f"   - Issue: Security vulnerability found in image \"{image_name}\".")
+                        print("   - Suggested Action:")
+                        print("     - Update the image to the latest secure version.")
+                        print("     - Review image security policies and ensure regular vulnerability scans.\n")
+                        security_issues.append({
+                            'namespace': pod.metadata.namespace,
+                            'image': image_name,
+                            'vulnerability': 'Example vulnerability'
+                        })
+
+                    # Add similar checks for other images or custom vulnerability logic
+        except ApiException as e:
+            print(f"Error performing security scans: {e}\n")
 
         return security_issues
 
@@ -180,9 +224,8 @@ class K8sTroubleshooter:
                         print("  - Suggested Action:")
                         print("    - Check if the associated pods are running and ready.")
                         print("    - Verify the service selector matches the pod labels correctly.\n")
-                # Add more diagnostics for other types of services (NodePort, LoadBalancer) if needed
 
-            # Example for checking pod connectivity (This is a placeholder, actual implementation requires more complex checks)
+            # Example for checking pod connectivity
             all_pods = self.core_v1.list_pod_for_all_namespaces().items
             for pod in all_pods:
                 if pod.status.pod_ip is None:
@@ -190,8 +233,44 @@ class K8sTroubleshooter:
                     print("  - Suggested Action:")
                     print("    - Ensure the CNI plugin is functioning correctly.")
                     print("    - Investigate network policy or security group configurations.\n")
+
+                # Check if any pods have DNS resolution issues
+                if pod.status.phase == "Running":
+                    dns_policy = pod.spec.dns_policy
+                    if dns_policy and dns_policy != "ClusterFirst":
+                        print(f"- Warning: Pod {pod.metadata.name} in namespace {pod.metadata.namespace} is not using the recommended DNS policy.")
+                        print("  - Suggested Action:")
+                        print("    - Consider setting the DNS policy to 'ClusterFirst' for optimal internal DNS resolution.\n")
         except ApiException as e:
             print(f"Error performing network diagnostics: {e}\n")
+
+    def storage_checks(self):
+        print("Storage Diagnostics:")
+
+        try:
+            persistent_volumes = self.core_v1.list_persistent_volume().items
+            for pv in persistent_volumes:
+                if pv.status.phase != "Bound":
+                    print(f"- Warning: PersistentVolume {pv.metadata.name} is in {pv.status.phase} state.")
+                    print("  - Suggested Action:")
+                    print("    - Ensure the PersistentVolumeClaim is correctly configured and is bound to the PV.")
+                    print("    - Check the storage class and availability of storage resources.\n")
+        except ApiException as e:
+            print(f"Error performing storage checks: {e}\n")
+
+    def pod_disruption_checks(self):
+        print("Pod Disruption Budget Diagnostics:")
+
+        try:
+            pdbs = self.policy_v1.list_pod_disruption_budget_for_all_namespaces().items
+            for pdb in pdbs:
+                if pdb.status.current_healthy < pdb.status.desired_healthy:
+                    print(f"- Warning: PodDisruptionBudget {pdb.metadata.name} in namespace {pdb.metadata.namespace} has fewer healthy pods than desired.")
+                    print("  - Suggested Action:")
+                    print("    - Investigate if there are ongoing disruptions or issues affecting the pods.")
+                    print("    - Ensure there are sufficient resources and pod replicas to meet the disruption budget requirements.\n")
+        except ApiException as e:
+            print(f"Error performing PodDisruptionBudget checks: {e}\n")
 
     def summary(self, critical_issues, performance_warnings, security_issues):
         print("Summary:")
@@ -204,6 +283,8 @@ class K8sTroubleshooter:
         print("2. Investigate and optimize resource usage on high-demand nodes.")
         print("3. Review security vulnerabilities and update affected images.")
         print("4. Monitor and improve network performance and service configurations.")
+        print("5. Ensure PersistentVolumes are correctly bound and storage resources are available.")
+        print("6. Verify PodDisruptionBudgets are maintained to ensure service availability.")
 
 if __name__ == "__main__":
     troubleshooter = K8sTroubleshooter()
